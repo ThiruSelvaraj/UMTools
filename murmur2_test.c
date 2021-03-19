@@ -33,8 +33,10 @@
  * Note that the program is self-contained and does not link with UM.
  *
  * USAGE:
- *   murmur2_test topics.txt
- * Where topics.txt contains a list of topic names, one per line.
+ *   murmur2_test [-h] [-s size] [topics.txt]
+ *     -h Help
+ *     -s Hash table size; Default 131111
+ *     topics.txt contains a list of topic names, one per line.
  *
  * SAMPLE OUTPUT:
  *   Reading topics from db_topics.txt...
@@ -82,6 +84,22 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+bool is_prime(unsigned int num) {
+	if (num <= 1) 
+		return false;
+
+	if (num % 2 == 0 && num > 2) 
+		return false;
+
+	for(int i = 3; i < num / 2; i+= 2) {
+		if (num % i == 0)
+			return false;
+	}
+	return true;
+}
 
 unsigned long hash_topic_sym_murmur2(const char * key, size_t len)
 {
@@ -144,34 +162,66 @@ unsigned long hash_topic_sym_murmur2(const char * key, size_t len)
 /* 611111 */
 /* 588631 */
 /* 169991 */
-#define HASH_TABLE_SIZE 131111
-int results[HASH_TABLE_SIZE];
+
+#define DEFAULT_HASH_TABLE_SIZE 131111
 
 #define MURMUR2_MAX_TOPICS 200000
 char *topics[MURMUR2_MAX_TOPICS];
+
+#define MAX_BUCKETS 10
+
+char *usage_string = "USAGE:\n" \
+			"\t murmur2_test [-h] [-s size] [topics.txt]\n" \
+			"\t\t -h Help\n" \
+			"\t\t -s Hash table size; Default 131111\n" \
+			"\t\t topics.txt contains a list of topic names, one per line.\n";
 
 int main(int argc, char *argv[])
 {
 	char local_string[256];
 	int loop;
 	int max;
+	int buckets[MAX_BUCKETS + 1];
+        unsigned int tablesz = DEFAULT_HASH_TABLE_SIZE;
 	unsigned int hash;
 	unsigned int index;
+	unsigned int *results;
+	char *filename = NULL;
 	FILE *fp = NULL;
 
-	if (argc != 2) {
-		printf("ERROR: need 1 parameter which is the filename containing topics\n");
-		return(1);
+	if (argc < 2 || argc > 4) {
+		printf("%s", usage_string);
+		return 1;
 	}
 
-	fp = fopen(argv[1], "r");
+	if(strcmp(argv[1], "-h") == 0) {
+		printf("%s", usage_string);
+		return 1;
+	}
+	else if(strcmp(argv[1], "-s") == 0) {
+		tablesz = atoi(argv[2]);
+		filename = argv[3];
+	}
+	else
+		filename = argv[1];
+
+	if(is_prime(tablesz) == false) {
+		printf("ERROR: Hash table size must be a prime number; %u is not a prime number\n", tablesz);
+		return 1;
+	}
+
+	results = (unsigned int *) malloc(tablesz * sizeof(results));
+
+	fp = fopen(filename, "r");
+
 	if (fp == NULL) {
-		printf("ERROR: must supply valid filename (%s)\n", argv[1]);
-		return(1);
+		printf("ERROR: Invalid options or filename (%s)\n", filename);
+		printf("%s", usage_string);
+		return 1;
 	}
 
-	printf("Reading topics from %s...\n", argv[1]);
-	for (loop=0; loop<MURMUR2_MAX_TOPICS; loop++) {
+	printf("Reading topics from %s...\n", filename); 
+	for (loop = 0; loop < MURMUR2_MAX_TOPICS; loop++) {
 		if (fgets(local_string, 256, fp) == NULL) break;
 		topics[loop] = strdup(local_string);
 		topics[loop][strlen(local_string)-1] = '\0'; /* Turn line feed into null (assume no \r) */
@@ -179,97 +229,37 @@ int main(int argc, char *argv[])
 	}
 	max = loop;
 
+	memset(results, 0, (tablesz * sizeof(results)));
+
 	printf("Analyzing topics...\n");
-	memset(results, 0, sizeof(results));
-	for (loop=0; loop<max; loop++) {
+
+	for (loop = 0; loop < max; loop++) {
 		hash = (unsigned int) (hash_topic_sym_murmur2(topics[loop], strlen(topics[loop])));
-		index = hash % HASH_TABLE_SIZE;
+		index = hash % tablesz;
 		results[index]++;
 		/* This is a nice output to see all the topics, the raw hash, and the index into the hash table. */
 		/* printf("Topic(%s) Hash(%u) Index(%d)\n", topics[loop], hash, index); */
 	}
 
 	printf("Hash results...\n");
-	printf("---Topic TOTAL: %d Hash Size: %d (in bytes: %d)\n", max, HASH_TABLE_SIZE, sizeof(results));
+	printf("---Topic TOTAL: %d Hash Size: %u (in bytes: %lu)\n", max, tablesz, (sizeof(results) * tablesz));
 
-	max = 0;
-	for (loop=0; loop<HASH_TABLE_SIZE; loop++) {
-		if (results[loop] == 1) {
-			max++;
-		}
+	memset(buckets, 0, sizeof(buckets));
+
+	for (loop = 0; loop < tablesz; loop++) {
+		if(results[loop] < MAX_BUCKETS) 
+			buckets[results[loop]]++;
+		else
+			buckets[MAX_BUCKETS]++;
 	}
-	printf("---Hash 1 results: %d\n", max);
 
-	max = 0;
-	for (loop=0; loop<HASH_TABLE_SIZE; loop++) {
-		if (results[loop] == 2) {
-			max++;
-		}
-	}
-	printf("---Hash 2 results: %d\n", max);
+	/* Loop through the bucket. Skip buckets[0]; it's invalid */
+	for(loop = 1; loop < MAX_BUCKETS; loop++) 
+		printf("---Hash %d results: %d\n", loop, buckets[loop]);
 
-	max = 0;
-	for (loop=0; loop<HASH_TABLE_SIZE; loop++) {
-		if (results[loop] == 3) {
-			max++;
-		}
-	}
-	printf("---Hash 3 results: %d\n", max);
+	printf("---Hash %d or greater results: %d\n", MAX_BUCKETS, buckets[MAX_BUCKETS]);
 
-	max = 0;
-	for (loop=0; loop<HASH_TABLE_SIZE; loop++) {
-		if (results[loop] == 4) {
-			max++;
-		}
-	}
-	printf("---Hash 4 results: %d\n", max);
+	free(results);
 
-	max = 0;
-	for (loop=0; loop<HASH_TABLE_SIZE; loop++) {
-		if (results[loop] == 5) {
-			max++;
-		}
-	}
-	printf("---Hash 5 results: %d\n", max);
-
-	max = 0;
-	for (loop=0; loop<HASH_TABLE_SIZE; loop++) {
-		if (results[loop] == 6) {
-			max++;
-		}
-	}
-	printf("---Hash 6 results: %d\n", max);
-
-	max = 0;
-	for (loop=0; loop<HASH_TABLE_SIZE; loop++) {
-		if (results[loop] == 7) {
-			max++;
-		}
-	}
-	printf("---Hash 7 results: %d\n", max);
-
-	max = 0;
-	for (loop=0; loop<HASH_TABLE_SIZE; loop++) {
-		if (results[loop] == 8) {
-			max++;
-		}
-	}
-	printf("---Hash 8 results: %d\n", max);
-
-	max = 0;
-	for (loop=0; loop<HASH_TABLE_SIZE; loop++) {
-		if (results[loop] == 9) {
-			max++;
-		}
-	}
-	printf("---Hash 9 results: %d\n", max);
-
-	max = 0;
-	for (loop=0; loop<HASH_TABLE_SIZE; loop++) {
-		if (results[loop] > 9) {
-			max++;
-		}
-	}
-	printf("---Hash greater than 9 results: %d\n", max);
-
+	return 0;
 }
